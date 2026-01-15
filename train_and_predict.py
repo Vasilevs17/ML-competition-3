@@ -5,6 +5,7 @@
 Запускать в Google Colab после загрузки архивов и CSV в рабочую директорию.
 """
 
+import gc
 import os
 import random
 import zipfile
@@ -34,13 +35,13 @@ except ImportError:
 
 
 SEED = 42
-BATCH_SIZE = 32
-NUM_EPOCHS = 12
-LR = 2e-4
-IMG_SIZE = 320
+BATCH_SIZE = 16
+NUM_EPOCHS = 18
+LR = 1e-4
+IMG_SIZE = 384
 NUM_WORKERS = 2
 WEIGHT_DECAY = 1e-4
-PATIENCE = 4
+PATIENCE = 6
 
 TRAIN_ZIPS = [
     ("train_images_covers (1).zip", "train"),
@@ -143,7 +144,7 @@ class CoverRegressor(nn.Module):
     def __init__(self):
         super().__init__()
         self.backbone = timm.create_model(
-            "convnext_tiny.in12k_ft_in1k", pretrained=True, num_classes=2
+            "convnext_base.fb_in22k_ft_in1k", pretrained=True, num_classes=2
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -242,9 +243,11 @@ def predict(model: nn.Module, test_dir: Path, transform: transforms.Compose) -> 
         image = Image.open(img_path).convert("RGB")
         image_tensor = transform(image).unsqueeze(0).to(device)
         preds = model(image_tensor).squeeze(0)
-        flipped = torch.flip(image_tensor, dims=[3])
-        preds_flip = model(flipped).squeeze(0)
-        preds = ((preds + preds_flip) / 2.0).cpu().numpy()
+        hflip = torch.flip(image_tensor, dims=[3])
+        vflip = torch.flip(image_tensor, dims=[2])
+        preds_hflip = model(hflip).squeeze(0)
+        preds_vflip = model(vflip).squeeze(0)
+        preds = ((preds + preds_hflip + preds_vflip) / 3.0).cpu().numpy()
         preds = np.clip(preds, 0.0, 1.0)
         results.append((image_id, float(preds[0]), float(preds[1])))
 
@@ -292,8 +295,13 @@ def main() -> None:
     sample = pd.read_csv(SUBMISSION_SAMPLE)
     submission = sample[["image_id"]].merge(preds_df, on="image_id", how="left")
     submission[["c", "s"]] = submission[["c", "s"]].fillna(0.0)
-    submission.to_csv("submission.csv", index=False)
-    print("Готово! submission.csv сохранен.")
+    submission.to_csv("submission_ml_3.csv", index=False)
+    print("Готово! submission_ml_3.csv сохранен.")
+    del model, train_loader, val_loader, train_dataset, val_dataset
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
 
 if __name__ == "__main__":
